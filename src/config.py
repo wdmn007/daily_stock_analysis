@@ -543,8 +543,8 @@ class Config:
     https_proxy: Optional[str] = None # HTTPS 代理
     
     # === 定时任务配置 ===
-    schedule_enabled: bool = False            # 是否启用定时任务
-    schedule_time: str = "18:00"              # 每日推送时间（HH:MM 格式）
+    schedule_enabled: bool = True 
+    schedule_time: str = "30 15,10 * * *"     # 是否启用定时任务
     schedule_run_immediately: bool = True     # 启动时是否立即执行一次
     run_immediately: bool = True              # 启动时是否立即执行一次（非定时模式）
     market_review_enabled: bool = True        # 是否启用大盘复盘
