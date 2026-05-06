@@ -5,7 +5,7 @@ import { getParsedApiError } from '../api/error';
 import { historyApi } from '../api/history';
 import type { AnalysisReport, HistoryItem, HistoryListResponse, TaskInfo } from '../types/analysis';
 import { getRecentStartDate, getTodayInShanghai } from '../utils/format';
-import { validateStockCode } from '../utils/validation';
+import { isObviouslyInvalidStockQuery, looksLikeStockCode, validateStockCode } from '../utils/validation';
 
 const PAGE_SIZE = 20;
 
@@ -17,6 +17,15 @@ type FetchHistoryOptions = {
   silent?: boolean;
 };
 
+type SubmitAnalysisOptions = {
+  stockCode?: string;
+  stockName?: string;
+  originalQuery?: string;
+  selectionSource?: SelectionSource;
+  notify?: boolean;
+  forceRefresh?: boolean;
+};
+
 let reportRequestSeq = 0;
 let analyzeRequestSeq = 0;
 let historyRequestSeq = 0;
@@ -25,6 +34,7 @@ const dismissedTaskIds = new Set<string>();
 export interface StockPoolState {
   query: string;
   selectionSource: SelectionSource;
+  notify: boolean;
   inputError?: string;
   duplicateError: string | null;
   error: ParsedApiError | null;
@@ -52,7 +62,8 @@ export interface StockPoolState {
   toggleHistorySelection: (recordId: number) => void;
   toggleSelectAllVisible: () => void;
   deleteSelectedHistory: () => Promise<void>;
-  submitAnalysis: () => Promise<void>;
+  submitAnalysis: (options?: SubmitAnalysisOptions) => Promise<void>;
+  setNotify: (notify: boolean) => void;
   syncTaskCreated: (task: TaskInfo) => void;
   syncTaskUpdated: (task: TaskInfo) => void;
   syncTaskFailed: (task: TaskInfo) => void;
@@ -63,6 +74,7 @@ export interface StockPoolState {
 const initialState = {
   query: '',
   selectionSource: 'manual' as SelectionSource,
+  notify: true,
   inputError: undefined,
   duplicateError: null,
   error: null,
@@ -167,7 +179,8 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
 
   setQuery: (query) => {
     set({
-      query: query.toUpperCase(),
+      query,
+      selectionSource: 'manual',
       inputError: undefined,
       duplicateError: null,
     });
@@ -176,6 +189,8 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
   clearError: () => set({ error: null }),
 
   clearInlineMessages: () => set({ inputError: undefined, duplicateError: null }),
+
+  setNotify: (notify) => set({ notify }),
 
   openMarkdownDrawer: () => set({ markdownDrawerOpen: true }),
 
@@ -286,11 +301,34 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
     }
   },
 
-  submitAnalysis: async () => {
-    const { valid, message, normalized } = validateStockCode(get().query);
-    if (!valid) {
-      set({ inputError: message, duplicateError: null });
+  submitAnalysis: async (options) => {
+    const state = get();
+    const rawStockCode = options?.stockCode ?? state.query;
+    const stockCodeInput = rawStockCode.trim();
+    const stockName = options?.stockName;
+    const selectionSource = options?.selectionSource ?? state.selectionSource;
+    const originalQuery = (options?.originalQuery ?? state.query).trim();
+    const notify = options?.notify ?? state.notify;
+    const forceRefresh = options?.forceRefresh ?? false;
+
+    if (!stockCodeInput) {
+      set({ inputError: '请输入股票代码', duplicateError: null });
       return;
+    }
+
+    if (selectionSource !== 'autocomplete' && isObviouslyInvalidStockQuery(stockCodeInput)) {
+      set({ inputError: '请输入有效的股票代码或股票名称', duplicateError: null });
+      return;
+    }
+
+    let normalizedStockCode = stockCodeInput;
+    if (selectionSource === 'autocomplete' || looksLikeStockCode(stockCodeInput)) {
+      const { valid, message, normalized } = validateStockCode(stockCodeInput);
+      if (!valid) {
+        set({ inputError: message, duplicateError: null });
+        return;
+      }
+      normalizedStockCode = normalized;
     }
 
     set({
@@ -303,8 +341,13 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
     const requestId = ++analyzeRequestSeq;
     try {
       await analysisApi.analyzeAsync({
-        stockCode: normalized,
+        stockCode: normalizedStockCode,
         reportType: 'detailed',
+        stockName,
+        originalQuery: originalQuery || stockCodeInput,
+        selectionSource,
+        notify,
+        forceRefresh,
       });
 
       if (requestId !== analyzeRequestSeq) {
